@@ -119,10 +119,19 @@ proc init*(T: type BeaconNode,
            depositContractDeployedAt: BlockHashOrNumber,
            eth1Network: Option[Eth1Network],
            genesisStateContents: string,
-           genesisDepositsSnapshotContents: string): BeaconNode {.
+           depositContractSnapshotContents: string): BeaconNode {.
     raises: [Defect, CatchableError].} =
 
   var taskpool: TaskpoolPtr
+
+  let depositContractSnapshot = if depositContractSnapshotContents.len > 0:
+    try:
+      some SSZ.decode(depositContractSnapshotContents, DepositContractSnapshot)
+    except CatchableError as err:
+      fatal "Invalid deposit contract snapshot", err = err.msg
+      quit 1
+  else:
+    none DepositContractSnapshot
 
   try:
     if config.numThreads < 0:
@@ -199,6 +208,24 @@ proc init*(T: type BeaconNode,
     fatal "--finalized-checkpoint-block cannot be specified without --finalized-checkpoint-state"
     quit 1
 
+  template getDepositContractSnapshot: auto =
+    if depositContractSnapshot.isSome:
+      depositContractSnapshot
+    elif not cfg.DEPOSIT_CONTRACT_ADDRESS.isZeroMemory:
+      let snapshotRes = waitFor createInitialDepositSnapshot(
+        cfg.DEPOSIT_CONTRACT_ADDRESS,
+        depositContractDeployedAt,
+        config.web3Urls[0])
+      if snapshotRes.isErr:
+        fatal "Failed to locate the deposit contract deployment block",
+              depositContract = cfg.DEPOSIT_CONTRACT_ADDRESS,
+              deploymentBlock = $depositContractDeployedAt
+        quit 1
+      else:
+        some snapshotRes.get
+    else:
+      none(DepositContractSnapshot)
+
   var eth1Monitor: Eth1Monitor
   if not ChainDAGRef.isInitialized(db).isOk():
     var
@@ -223,8 +250,9 @@ proc init*(T: type BeaconNode,
         let eth1MonitorRes = waitFor Eth1Monitor.init(
           cfg,
           db,
+          nil,
           config.web3Urls,
-          depositContractDeployedAt,
+          getDepositContractSnapshot(),
           eth1Network,
           config.web3ForcePolling)
 
@@ -327,8 +355,10 @@ proc init*(T: type BeaconNode,
             dataDir = config.dataDir
       quit 1
 
-  let beaconClock = BeaconClock.init(
-    getStateField(dag.headState.data, genesis_time))
+  let
+    beaconClock = BeaconClock.init(
+      getStateField(dag.headState.data, genesis_time))
+    getBeaconTime = beaconClock.getBeaconTimeFn()
 
   if config.weakSubjectivityCheckpoint.isSome:
     let
@@ -346,16 +376,13 @@ proc init*(T: type BeaconNode,
             headStateSlot = getStateField(dag.headState.data, slot)
       quit 1
 
-  if eth1Monitor.isNil and
-     config.web3Urls.len > 0 and
-     genesisDepositsSnapshotContents.len > 0:
-    let genesisDepositsSnapshot = SSZ.decode(genesisDepositsSnapshotContents,
-                                             DepositContractSnapshot)
+  if eth1Monitor.isNil and config.web3Urls.len > 0:
     eth1Monitor = Eth1Monitor.init(
       cfg,
       db,
+      getBeaconTime,
       config.web3Urls,
-      genesisDepositsSnapshot,
+      getDepositContractSnapshot(),
       eth1Network,
       config.web3ForcePolling)
 
@@ -403,7 +430,6 @@ proc init*(T: type BeaconNode,
     netKeys = getPersistentNetKeys(rng[], config)
     nickname = if config.nodeName == "auto": shortForm(netKeys)
                else: config.nodeName
-    getBeaconTime = beaconClock.getBeaconTimeFn()
     network = createEth2Node(
       rng, config, netKeys, cfg, dag.forkDigests, getBeaconTime,
       getStateField(dag.headState.data, genesis_validators_root))
@@ -446,8 +472,12 @@ proc init*(T: type BeaconNode,
           config.validatorsDir(), SlashingDbName)
     validatorPool = newClone(ValidatorPool.init(slashingProtectionDB))
 
+    # TODO waitFor etc. This is temporary init code, so fine for now
+    web3Provider = waitFor newWeb3DataProvider(
+      default(Eth1Address), if config.web3Urls.len > 0: config.web3Urls[0] else: "")
+
     consensusManager = ConsensusManager.new(
-      dag, attestationPool, quarantine
+      dag, attestationPool, quarantine, web3Provider.get
     )
     blockProcessor = BlockProcessor.new(
       config.dumpEnabled, config.dumpDirInvalid, config.dumpDirIncoming,
