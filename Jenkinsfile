@@ -103,10 +103,21 @@ parallel(
 			}
 		}
 	},
-	"macOS": {
+	"macOS (AMD64)": {
 		throttle(['nimbus-eth2']) {
 			timeout(time: 3, unit: 'HOURS') {
 				node("macos && x86_64") {
+					withEnv(["NPROC=${sh(returnStdout: true, script: 'sysctl -n hw.logicalcpu').trim()}"]) {
+						runStages()
+					}
+				}
+			}
+		}
+	},
+	"macOS (ARM64)": {
+		throttle(['nimbus-eth2']) {
+			timeout(time: 3, unit: 'HOURS') {
+				node("macos && arm64") {
 					withEnv(["NPROC=${sh(returnStdout: true, script: 'sysctl -n hw.logicalcpu').trim()}"]) {
 						runStages()
 					}
