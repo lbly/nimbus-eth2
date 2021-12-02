@@ -951,9 +951,8 @@ proc onSecond(node: BeaconNode) =
     node.handleMissingBlocks()
 
   # Nim GC metrics (for the main thread)
-  {.gcsafe.}:
-    updateSystemMetrics()
-    updateThreadMetrics()
+  updateSystemMetrics()
+  updateThreadMetrics()
 
 proc runOnSecondLoop(node: BeaconNode) {.async.} =
   let sleepTime = chronos.seconds(1)
