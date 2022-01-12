@@ -8,8 +8,10 @@
 {.push raises: [Defect].}
 
 import
+  chronos,
   std/[options, sequtils, tables, sets],
   stew/[assign2, byteutils, results],
+  eth/async_utils,
   metrics, snappy, chronicles,
   ../spec/[beaconstate, eth2_merkleization, eth2_ssz_serialization, helpers,
     state_transition, validator],
@@ -20,6 +22,9 @@ import
 export
   eth2_merkleization, eth2_ssz_serialization,
   block_pools_types, results, beacon_chain_db
+
+import ../eth1/eth1_monitor
+import web3/engine_api_types
 
 # https://github.com/ethereum/eth2.0-metrics/blob/master/metrics.md#interop-metrics
 declareGauge beacon_head_root, "Root of the head block of the beacon chain"
@@ -422,7 +427,7 @@ proc init*(T: type ChainDAGRef, cfg: RuntimeConfig, db: BeaconChainDB,
         if not containsBlock(cfg, db, blck.summary.slot, blck.root):
           continue
 
-      let newRef = BlockRef.init(blck.root, blck.summary.slot)
+      let newRef = BlockRef.init(blck.root, Eth2Digest(), blck.summary.slot)
       if curRef == nil:
         curRef = newRef
         headRef = newRef
@@ -1659,3 +1664,37 @@ proc getBlockSSZ*(dag: ChainDAGRef, id: BlockId, bytes: var seq[byte]): bool =
     dag.db.getAltairBlockSSZ(id.root, bytes)
   of BeaconBlockFork.Bellatrix:
     dag.db.getMergeBlockSSZ(id.root, bytes)
+
+proc insertExecutionPayload*(
+    web3Provider: auto, executionPayload: merge.ExecutionPayload):
+    Future[PayloadExecutionStatus] {.async.} =
+  debug "executePayload: inserting block into execution engine",
+    parentHash = executionPayload.parent_hash,
+    blockHash = executionPayload.block_hash,
+    stateRoot = shortLog(executionPayload.state_root),
+    receiptsRoot = shortLog(executionPayload.receipts_root),
+    random = shortLog(executionPayload.random),
+    blockNumber = executionPayload.block_number,
+    gasLimit = executionPayload.gas_limit,
+    gasUsed = executionPayload.gas_used,
+    timestamp = executionPayload.timestamp,
+    extraDataLen = executionPayload.extra_data.len,
+    blockHash = executionPayload.block_hash,
+    baseFeePerGas = UInt256.fromBytesLE(executionPayload.base_fee_per_gas.data),
+    numTransactions = executionPayload.transactions.len
+
+  try:
+    let
+      payloadResponse =
+        awaitWithTimeout(
+            web3Provider.executePayload(
+              executionPayload.asEngineExecutionPayload),
+            650.milliseconds):
+          info "executePayload: insertExecutionPayload timed out"
+          ExecutePayloadResponse(status: PayloadExecutionStatus.syncing)
+      payloadStatus = payloadResponse.status
+
+    return payloadStatus
+  except CatchableError as err:
+    info "insertExecutionPayload failed", msg = err.msg
+    return PayloadExecutionStatus.syncing

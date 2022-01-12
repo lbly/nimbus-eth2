@@ -1,5 +1,5 @@
 # beacon_chain
-# Copyright (c) 2018-2021 Status Research & Development GmbH
+# Copyright (c) 2018-2022 Status Research & Development GmbH
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at https://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at https://www.apache.org/licenses/LICENSE-2.0).
@@ -10,6 +10,7 @@
 import
   std/math,
   stew/results,
+  eth/async_utils,
   chronicles, chronos, metrics,
   ../spec/datatypes/[phase0, altair, merge],
   ../spec/[forks, signatures_batch],
@@ -18,9 +19,12 @@ import
     spec_cache],
   ./consensus_manager,
   ".."/[beacon_clock],
-  ../sszdump
+  ../sszdump,
+  ../eth1/eth1_monitor
 
 export sszdump, signatures_batch
+
+import web3/engine_api_types
 
 # Block Processor
 # ------------------------------------------------------------------------------
@@ -69,7 +73,7 @@ type
     # ----------------------------------------------------------------
     consensusManager: ref ConsensusManager
     validatorMonitor: ref ValidatorMonitor
-      ## Blockchain DAG, AttestationPool and Quarantine
+      ## Blockchain DAG, AttestationPool, Quarantine, and Eth1Manager
     getBeaconTime: GetBeaconTimeFn
 
     verifier: BatchVerifier
@@ -283,7 +287,83 @@ proc runQueueProcessingLoop*(self: ref BlockProcessor) {.async.} =
       # in this case - doing so also allows us to benefit from more batching /
       # larger network reads when under load.
       idleTimeout = 10.milliseconds
+      web3Timeout = 650.milliseconds
 
     discard await idleAsync().withTimeout(idleTimeout)
 
-    self[].processBlock(await self[].blockQueue.popFirst())
+    let
+      blck = await self[].blockQueue.popFirst()
+      hasExecutionPayload = blck.blck.kind >= BeaconBlockFork.Bellatrix
+      executionPayloadStatus =
+        if  hasExecutionPayload and
+            # Allow local testnets to run without requiring an execution layer
+            blck.blck.mergeData.message.body.execution_payload !=
+              default(merge.ExecutionPayload):
+          try:
+            # Minimize window for Eth1 monitor to shut down connection
+            await self.consensusManager.eth1Monitor.ensureDataProvider()
+
+            await insertExecutionPayload(
+              self.consensusManager.eth1Monitor.dataProvider,
+              blck.blck.mergeData.message.body.execution_payload)
+          except CatchableError as err:
+            info "runQueueProcessingLoop: insertExecutionPayload failed",
+              err = err.msg
+            PayloadExecutionStatus.syncing
+        else:
+          # Vacuously
+          PayloadExecutionStatus.valid
+
+    # https://github.com/ethereum/execution-apis/blob/v1.0.0-alpha.5/src/engine/specification.md#specification
+    # "Client software MUST discard the payload if it's deemed invalid."
+    if executionPayloadStatus == PayloadExecutionStatus.invalid:
+      info "runQueueProcessingLoop: execution payload invalid"
+      if not blck.resfut.isNil:
+        blck.resfut.complete(Result[void, BlockError].err(BlockError.Invalid))
+      continue
+
+    if executionPayloadStatus == PayloadExecutionStatus.valid:
+      self[].processBlock(blck)
+    else:
+      # Every non-nil future must be completed here, but don't want to process
+      # the block any further in CL terms. Also don't want to specify Invalid,
+      # as if it gets here, it's something more like MissingParent (except, on
+      # the EL side).
+      if not blck.resfut.isNil:
+        blck.resfut.complete(
+          Result[void, BlockError].err(BlockError.MissingParent))
+
+    if  executionPayloadStatus == PayloadExecutionStatus.valid and
+        hasExecutionPayload:
+      let
+        headBlockRoot = self.consensusManager.dag.head.executionBlockRoot
+        finalizedBlockRoot =
+          if self.consensusManager.dag.finalizedHead.blck.executionBlockRoot != default(Eth2Digest):
+            self.consensusManager.dag.finalizedHead.blck.executionBlockRoot
+          else:
+            default(Eth2Digest)
+
+      info "runQueueProcessingLoop: running forkchoiceUpdated",
+        headBlockRoot,
+        finalizedBlockRoot,
+        block_hash = blck.blck.mergeData.message.body.execution_payload.block_hash,
+        parent_hash = blck.blck.mergeData.message.body.execution_payload.parent_hash,
+        executionPayloadStatus
+
+      if  headBlockRoot      != default(Eth2Digest) and
+          finalizedBlockRoot != default(Eth2Digest):
+        try:
+          # Minimize window for Eth1 monitor to shut down connection
+          await self.consensusManager.eth1Monitor.ensureDataProvider()
+
+          discard awaitWithTimeout(
+            forkchoiceUpdated(
+              self.consensusManager.eth1Monitor.dataProvider, headBlockRoot,
+              finalizedBlockRoot),
+            web3Timeout):
+              info "runQueueProcessingLoop: forkchoiceUpdated timed out"
+              default(ForkchoiceUpdatedResponse)
+        except CatchableError as err:
+          info "runQueueProcessingLoop: forkchoiceUpdated failed",
+            err = err.msg
+          discard
