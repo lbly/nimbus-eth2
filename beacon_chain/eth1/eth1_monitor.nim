@@ -491,7 +491,8 @@ proc forkchoiceUpdated*(p: Web3DataProviderRef,
   # don't crash.
   if p.isNil:
     var fcuR: Future[engine_api.ForkchoiceUpdatedResponse]
-    fcuR.complete(engine_api.ForkchoiceUpdatedResponse(status: "SYNCING"))
+    fcuR.complete(engine_api.ForkchoiceUpdatedResponse(
+      status: ForkChoiceUpdatedStatus.syncing))
     return fcuR
 
   p.web3.provider.engine_forkchoiceUpdatedV1(

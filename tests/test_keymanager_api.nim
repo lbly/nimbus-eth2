@@ -100,7 +100,7 @@ proc startSingleNodeNetwork =
     "--keymanager-token-file=" & tokenFilePath,
     "--doppelganger-detection=off"], TaintedString it))
 
-  let metadata = loadEth2NetworkMetadata(dataDir)
+  let metadata = loadEth2NetworkMetadata(dataDir, none(Eth1Network))
 
   let node = BeaconNode.init(
     metadata.cfg,
