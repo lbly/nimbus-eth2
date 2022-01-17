@@ -76,6 +76,8 @@ type
   SyncManagerError* = object of CatchableError
   BeaconBlocksRes* = NetRes[seq[ForkedSignedBeaconBlock]]
 
+chronicles.formatIt SyncQueueKind: $it
+
 proc getShortMap*[T](req: SyncRequest[T],
                      data: openArray[ForkedSignedBeaconBlock]): string =
   ## Returns all slot numbers in ``data`` as placement map.
@@ -303,6 +305,10 @@ proc wakeupAndWaitWaiters[T](sq: SyncQueue[T]) {.async.} =
   sq.wakeupWaiters(true)
   discard await waitChanges
 
+proc clearAndWakeup*[T](sq: SyncQueue[T]) =
+  sq.pending.clear()
+  sq.wakeupWaiters(true)
+
 proc resetWait*[T](sq: SyncQueue[T], toSlot: Option[Slot]) {.async.} =
   ## Perform reset of all the blocked waiters in SyncQueue.
   ##
@@ -409,7 +415,8 @@ proc getRewindPoint*[T](sq: SyncQueue[T], failSlot: Slot,
                  finalized_slot = safeSlot, fail_slot = failSlot,
                  finalized_epoch = finalizedEpoch, fail_epoch = failEpoch,
                  rewind_epoch_count = rewind.epochCount,
-                 finalized_epoch = finalizedEpoch
+                 finalized_epoch = finalizedEpoch, direction = sq.kind,
+                 topics = "syncman"
             0'u64
         else:
           # `MissingParent` happened at different slot so we going to rewind for
@@ -419,7 +426,8 @@ proc getRewindPoint*[T](sq: SyncQueue[T], failSlot: Slot,
                  finalized_slot = safeSlot, fail_slot = failSlot,
                  finalized_epoch = finalizedEpoch, fail_epoch = failEpoch,
                  rewind_epoch_count = rewind.epochCount,
-                 finalized_epoch = finalizedEpoch
+                 finalized_epoch = finalizedEpoch, direction = sq.kind,
+                 topics = "syncman"
             0'u64
           else:
             1'u64
@@ -429,7 +437,8 @@ proc getRewindPoint*[T](sq: SyncQueue[T], failSlot: Slot,
           warn "Сould not rewind further than the last finalized epoch",
                finalized_slot = safeSlot, fail_slot = failSlot,
                finalized_epoch = finalizedEpoch, fail_epoch = failEpoch,
-               finalized_epoch = finalizedEpoch
+               finalized_epoch = finalizedEpoch, direction = sq.kind,
+               topics = "syncman"
           0'u64
         else:
           1'u64
@@ -438,7 +447,8 @@ proc getRewindPoint*[T](sq: SyncQueue[T], failSlot: Slot,
       warn "Unable to continue syncing, please restart the node",
            finalized_slot = safeSlot, fail_slot = failSlot,
            finalized_epoch = finalizedEpoch, fail_epoch = failEpoch,
-           finalized_epoch = finalizedEpoch
+           finalized_epoch = finalizedEpoch, direction = sq.kind,
+           topics = "syncman"
       # Calculate the rewind epoch, which will be equal to last rewind point or
       # finalizedEpoch
       let rewindEpoch =
@@ -460,7 +470,8 @@ proc getRewindPoint*[T](sq: SyncQueue[T], failSlot: Slot,
     # latest stored block.
     if failSlot == safeSlot:
       warn "Unable to continue syncing, please restart the node",
-           safe_slot = safeSlot, fail_slot = failSlot
+           safe_slot = safeSlot, fail_slot = failSlot, direction = sq.kind,
+           topics = "syncman"
     safeSlot
 
 iterator blocks*[T](sq: SyncQueue[T],
@@ -492,7 +503,7 @@ proc notInRange[T](sq: SyncQueue[T], sr: SyncRequest[T]): bool =
   of SyncQueueKind.Forward:
     (sq.queueSize > 0) and (sr.slot != sq.outSlot)
   of SyncQueueKind.Backward:
-    (sq.queueSize > 0) and (sr.slot + sr.count != sq.outSlot)
+    (sq.queueSize > 0) and (sr.slot + sr.count - 1'u64 != sq.outSlot)
 
 proc push*[T](sq: SyncQueue[T], sr: SyncRequest[T],
               data: seq[ForkedSignedBeaconBlock],
@@ -533,7 +544,7 @@ proc push*[T](sq: SyncQueue[T], sr: SyncRequest[T],
           some(sq.readyQueue.pop())
       of SyncQueueKind.Backward:
         let maxSlot = sq.readyQueue[0].request.slot +
-                      sq.readyQueue[0].request.count
+                      (sq.readyQueue[0].request.count - 1'u64)
         if sq.outSlot != maxSlot:
           none[SyncResult[T]]()
         else:
@@ -553,7 +564,7 @@ proc push*[T](sq: SyncQueue[T], sr: SyncRequest[T],
              blocks_count = len(sq.readyQueue[0].data),
              output_slot = sq.outSlot, input_slot = sq.inpSlot,
              peer = sq.readyQueue[0].request.item, rewind_to_slot = rewindSlot,
-             topics = "syncman"
+             direction = sq.readyQueue[0].request.kind, topics = "syncman"
         await sq.resetWait(some(rewindSlot))
         break
 
@@ -595,7 +606,7 @@ proc push*[T](sq: SyncQueue[T], sr: SyncRequest[T],
             request_step = item.request.step,
             blocks_map = getShortMap(item.request, item.data),
             blocks_count = len(item.data), errCode = res.error,
-            topics = "syncman"
+            direction = item.request.kind, topics = "syncman"
 
       var resetSlot: Option[Slot]
 
@@ -618,7 +629,8 @@ proc push*[T](sq: SyncQueue[T], sr: SyncRequest[T],
                  finalized_slot = safeSlot,
                  request_slot = req.slot, request_count = req.count,
                  request_step = req.step, blocks_count = len(item.data),
-                 blocks_map = getShortMap(req, item.data), topics = "syncman"
+                 blocks_map = getShortMap(req, item.data),
+                 direction = req.kind, topics = "syncman"
             resetSlot = some(rewindSlot)
             req.item.updateScore(PeerScoreMissingBlocks)
           else:
@@ -626,7 +638,8 @@ proc push*[T](sq: SyncQueue[T], sr: SyncRequest[T],
                   peer = req.item, to_slot = safeSlot,
                   request_slot = req.slot, request_count = req.count,
                   request_step = req.step, blocks_count = len(item.data),
-                  blocks_map = getShortMap(req, item.data), topics = "syncman"
+                  blocks_map = getShortMap(req, item.data),
+                  direction = req.kind, topics = "syncman"
             req.item.updateScore(PeerScoreBadBlocks)
         of SyncQueueKind.Backward:
           if safeSlot > req.slot:
@@ -638,7 +651,8 @@ proc push*[T](sq: SyncQueue[T], sr: SyncRequest[T],
                  finalized_slot = safeSlot,
                  request_slot = req.slot, request_count = req.count,
                  request_step = req.step, blocks_count = len(item.data),
-                 blocks_map = getShortMap(req, item.data), topics = "syncman"
+                 blocks_map = getShortMap(req, item.data),
+                 direction = req.kind, topics = "syncman"
             resetSlot = some(rewindSlot)
             req.item.updateScore(PeerScoreMissingBlocks)
           else:
@@ -646,14 +660,16 @@ proc push*[T](sq: SyncQueue[T], sr: SyncRequest[T],
                   peer = req.item, to_slot = safeSlot,
                   request_slot = req.slot, request_count = req.count,
                   request_step = req.step, blocks_count = len(item.data),
-                  blocks_map = getShortMap(req, item.data), topics = "syncman"
+                  blocks_map = getShortMap(req, item.data),
+                  direction = req.kind, topics = "syncman"
             req.item.updateScore(PeerScoreBadBlocks)
       of BlockError.Invalid:
         let req = item.request
         warn "Received invalid sequence of blocks", peer = req.item,
               request_slot = req.slot, request_count = req.count,
               request_step = req.step, blocks_count = len(item.data),
-              blocks_map = getShortMap(req, item.data), topics = "syncman"
+              blocks_map = getShortMap(req, item.data),
+              direction = req.kind, topics = "syncman"
         req.item.updateScore(PeerScoreBadBlocks)
       of BlockError.Duplicate, BlockError.UnviableFork:
         raiseAssert "Handled above"
@@ -668,11 +684,11 @@ proc push*[T](sq: SyncQueue[T], sr: SyncRequest[T],
                 queue_input_slot = sq.inpSlot, queue_output_slot = sq.outSlot,
                 rewind_epoch_count = sq.rewind.get().epochCount,
                 rewind_fail_slot = sq.rewind.get().failSlot,
-                reset_slot = resetSlot, topics = "syncman"
+                reset_slot = resetSlot, direction = sq.kind, topics = "syncman"
         of SyncQueueKind.Backward:
           debug "Rewind to slot was happened", reset_slot = reset_slot.get(),
                 queue_input_slot = sq.inpSlot, queue_output_slot = sq.outSlot,
-                reset_slot = resetSlot, topics = "syncman"
+                reset_slot = resetSlot, direction = sq.kind, topics = "syncman"
       break
 
 proc push*[T](sq: SyncQueue[T], sr: SyncRequest[T]) =
@@ -718,11 +734,11 @@ proc pop*[T](sq: SyncQueue[T], maxslot: Slot, item: T): SyncRequest[T] =
     of SyncQueueKind.Backward:
       if sq.inpSlot == 0xFFFF_FFFF_FFFF_FFFF'u64:
         return SyncRequest.empty(sq.kind, T)
-      if sq.inpSlot <= sq.finalSlot:
+      if sq.inpSlot < sq.finalSlot:
         return SyncRequest.empty(sq.kind, T)
       let (slot, count) =
         block:
-          let baseSlot = sq.inpSlot
+          let baseSlot = sq.inpSlot + 1'u64
           if baseSlot - sq.finalSlot < sq.chunkSize:
             let count = uint64(baseSlot - sq.finalSlot)
             (baseSlot - count, count)
