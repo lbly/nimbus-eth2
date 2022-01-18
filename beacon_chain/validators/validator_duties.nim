@@ -555,7 +555,7 @@ proc makeBeaconBlockForHeadAndSlot*(node: BeaconNode,
     except CatchableError as err:
       # Prefer not to create block at all if it can't get ExecutionPayload
       error "Error creating beacon block", msg = err.msg
-      err(ForkedBeaconBlock)
+      Result[ForkedBeaconBlock, cstring].err("Error getting ExecutionPayload")
     if res.isErr():
       # This is almost certainly a bug, but it's complex enough that there's a
       # small risk it might happen even when most proposals succeed - thus we

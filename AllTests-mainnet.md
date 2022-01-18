@@ -419,4 +419,4 @@ OK: 1/1 Fail: 0/1 Skip: 0/1
 OK: 1/1 Fail: 0/1 Skip: 0/1
 
 ---TOTAL---
-OK: 238/240 Fail: 0/240 Skip: 2/240
+OK: 227/229 Fail: 0/229 Skip: 2/229
