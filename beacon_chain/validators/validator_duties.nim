@@ -454,11 +454,11 @@ proc forkchoice_updated(state: bellatrix.BeaconState,
     none(bellatrix.PayloadId)
 
 proc get_execution_payload(
-    payload_id: Option[merge.PayloadId], execution_engine: Web3DataProviderRef):
-    Future[merge.ExecutionPayload] {.async.} =
+    payload_id: Option[bellatrix.PayloadId], execution_engine: Web3DataProviderRef):
+    Future[bellatrix.ExecutionPayload] {.async.} =
   return if payload_id.isNone():
     # Pre-merge, empty payload
-    default(merge.ExecutionPayload)
+    default(bellatrix.ExecutionPayload)
   else:
     asConsensusExecutionPayload(
       await execution_engine.getPayload(payload_id.get))

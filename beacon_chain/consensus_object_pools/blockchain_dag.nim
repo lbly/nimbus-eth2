@@ -15,7 +15,7 @@ import
   metrics, snappy, chronicles,
   ../spec/[beaconstate, eth2_merkleization, eth2_ssz_serialization, helpers,
     state_transition, validator],
-  ../spec/datatypes/[phase0, altair],
+  ../spec/datatypes/[phase0, altair, bellatrix],
   ".."/beacon_chain_db,
   "."/[block_pools_types, block_quarantine]
 
@@ -1673,7 +1673,7 @@ proc getBlockSSZ*(dag: ChainDAGRef, id: BlockId, bytes: var seq[byte]): bool =
     dag.db.getMergeBlockSSZ(id.root, bytes)
 
 proc newExecutionPayload*(
-    web3Provider: auto, executionPayload: merge.ExecutionPayload):
+    web3Provider: auto, executionPayload: bellatrix.ExecutionPayload):
     Future[PayloadExecutionStatus] {.async.} =
   debug "executePayload: inserting block into execution engine",
     parentHash = executionPayload.parent_hash,

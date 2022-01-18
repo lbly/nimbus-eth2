@@ -10,7 +10,7 @@
 import
   chronicles,
 
-  ../spec/datatypes/[phase0, altair],
+  ../spec/datatypes/[phase0, altair, bellatrix],
   ../spec/[helpers]
 
 export chronicles, phase0, altair, merge, helpers
@@ -78,7 +78,7 @@ func init*(
 
 func init*(
     T: type BlockRef, root: Eth2Digest,
-    blck: merge.SomeBeaconBlock | merge.TrustedBeaconBlock): BlockRef =
+    blck: bellatrix.SomeBeaconBlock | bellatrix.TrustedBeaconBlock): BlockRef =
   BlockRef.init(
     root, Eth2Digest(blck.body.execution_payload.block_hash), blck.slot)
 
