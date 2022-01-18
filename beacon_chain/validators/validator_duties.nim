@@ -506,7 +506,7 @@ proc makeBeaconBlockForHeadAndSlot*(node: BeaconNode,
           SyncAggregate.init()
         else:
           node.sync_committee_msg_pool[].produceSyncAggregate(head.root),
-        if slot.epoch < node.dag.cfg.MERGE_FORK_EPOCH:
+        if slot.epoch < node.dag.cfg.BELLATRIX_FORK_EPOCH:
           default(bellatrix.ExecutionPayload)
         else:
           # https://github.com/ethereum/consensus-specs/blob/v1.1.8/specs/bellatrix/validator.md#executionpayload
