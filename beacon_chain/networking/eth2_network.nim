@@ -1826,7 +1826,7 @@ proc newBeaconSwitch*(config: BeaconNodeConf, seckey: PrivateKey,
     .withMplex(5.minutes, 5.minutes)
     .withMaxConnections(config.maxPeers)
     .withMaxOut(config.maxPeers)
-    .withMaxIn(config.maxPeers div 2)
+    .withMaxIn(config.maxPeers)
     .withAgentVersion(config.agentString)
     .withTcpTransport({ServerFlags.ReuseAddr})
     .build()
