@@ -883,8 +883,8 @@ proc connectWorker(node: Eth2Node, index: int) {.async.} =
     # Previous worker dial might have hit the maximum peers.
     # TODO: could clear the whole connTable and connQueue here also, best
     # would be to have this event based coming from peer pool or libp2p.
-    if node.switch.connManager.outSema.count > 0:
-      await node.dialPeer(remotePeerAddr, index)
+    #if node.switch.connManager.outSema.count > 0:
+    await node.dialPeer(remotePeerAddr, index)
     # Peer was added to `connTable` before adding it to `connQueue`, so we
     # excluding peer here after processing.
     node.connTable.excl(remotePeerAddr.peerId)
@@ -1128,8 +1128,8 @@ proc runDiscoveryLoop*(node: Eth2Node) {.async.} =
         maxPeersToKick = len(node.peerPool) div 5
         peersToKick = min(roomDelta, maxPeersToKick)
 
-      if peersToKick > 0 and newPeers.len() > 0:
-        await node.trimConnections(peersToKick)
+      #if peersToKick > 0 and newPeers.len() > 0:
+      #  await node.trimConnections(peersToKick)
 
       for peerAddr in newPeers:
           # We adding to pending connections table here, but going
